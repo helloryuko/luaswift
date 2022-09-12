@@ -1,28 +1,3 @@
-/*
-Copied from https://github.com/oxyc/luaparse/blob/master/luaparse.js
-at commit a1114d312d09df280bc43b50a254679ca64e22a5
-
-Copyright (c) Oskar Schöldström 2012-2014
-
-Permission is hereby granted, free of charge, to any person obtaining
-a copy of this software and associated documentation files (the
-"Software"), to deal in the Software without restriction, including
-without limitation the rights to use, copy, modify, merge, publish,
-distribute, sublicense, and/or sell copies of the Software, and to
-permit persons to whom the Software is furnished to do so, subject to
-the following conditions:
-
-The above copyright notice and this permission notice shall be
-included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
-LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
-WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-/*
 /* global exports:true, module:true, require:true, define:true, global:true */
 
 (function (root, name, factory) {
@@ -68,7 +43,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     // in Node.js or RingoJS v0.8.0+
     /* istanbul ignore else */
     if (moduleExports) factory(freeModule.exports);
-    // in Narwhal or RingoJS v0.7.0-
+    // in RingoJS v0.7.0-
     else factory(freeExports);
   }
   // in a browser or Rhino
@@ -78,9 +53,9 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 }(this, 'luaparse', function (exports) {
   'use strict';
 
-  exports.version = '0.2.1';
+  exports.version = "0.3.1";
 
-  var input, options, length;
+  var input, options, length, features, encodingMode;
 
   // Options can be set either globally on the parser object through
   // defaultOptions, or during the parse call.
@@ -111,6 +86,99 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     // The version of Lua targeted by the parser (string; allowed values are
     // '5.1', '5.2', '5.3').
     , luaVersion: '5.1'
+    // Encoding mode: how to interpret code units higher than U+007F in input
+    , encodingMode: 'none'
+  };
+
+  function encodeUTF8(codepoint, highMask) {
+    highMask = highMask || 0;
+
+    if (codepoint < 0x80) {
+      return String.fromCharCode(codepoint);
+    } else if (codepoint < 0x800) {
+      return String.fromCharCode(
+        highMask | 0xc0 |  (codepoint >>  6)        ,
+        highMask | 0x80 | ( codepoint        & 0x3f)
+      );
+    } else if (codepoint < 0x10000) {
+      return String.fromCharCode(
+        highMask | 0xe0 |  (codepoint >> 12)        ,
+        highMask | 0x80 | ((codepoint >>  6) & 0x3f),
+        highMask | 0x80 | ( codepoint        & 0x3f)
+      );
+    } else /* istanbul ignore else */ if (codepoint < 0x110000) {
+      return String.fromCharCode(
+        highMask | 0xf0 |  (codepoint >> 18)        ,
+        highMask | 0x80 | ((codepoint >> 12) & 0x3f),
+        highMask | 0x80 | ((codepoint >>  6) & 0x3f),
+        highMask | 0x80 | ( codepoint        & 0x3f)
+      );
+    } else {
+      // TODO: Lua 5.4 allows up to six-byte sequences, as in UTF-8:1993
+      return null;
+    }
+  }
+
+  function toHex(num, digits) {
+    var result = num.toString(16);
+    while (result.length < digits)
+      result = '0' + result;
+    return result;
+  }
+
+  function checkChars(rx) {
+    return function (s) {
+      var m = rx.exec(s);
+      if (!m)
+        return s;
+      raise(null, errors.invalidCodeUnit, toHex(m[0].charCodeAt(0), 4).toUpperCase());
+    };
+  }
+
+  var encodingModes = {
+    // `pseudo-latin1` encoding mode: assume the input was decoded with the latin1 encoding
+    // WARNING: latin1 does **NOT** mean cp1252 here like in the bone-headed WHATWG standard;
+    // it means true ISO/IEC 8859-1 identity-mapped to Basic Latin and Latin-1 Supplement blocks
+    'pseudo-latin1': {
+      fixup: checkChars(/[^\x00-\xff]/),
+      encodeByte: function (value) {
+        if (value === null)
+          return '';
+        return String.fromCharCode(value);
+      },
+      encodeUTF8: function (codepoint) {
+        return encodeUTF8(codepoint);
+      },
+    },
+
+    // `x-user-defined` encoding mode: assume the input was decoded with the WHATWG `x-user-defined` encoding
+    'x-user-defined': {
+      fixup: checkChars(/[^\x00-\x7f\uf780-\uf7ff]/),
+      encodeByte: function (value) {
+        if (value === null)
+          return '';
+        if (value >= 0x80)
+          return String.fromCharCode(value | 0xf700);
+        return String.fromCharCode(value);
+      },
+      encodeUTF8: function (codepoint) {
+        return encodeUTF8(codepoint, 0xf700);
+      }
+    },
+
+    // `none` encoding mode: disregard intrepretation of string literals, leave identifiers as-is
+    'none': {
+      discardStrings: true,
+      fixup: function (s) {
+        return s;
+      },
+      encodeByte: function (value) {
+        return '';
+      },
+      encodeUTF8: function (codepoint) {
+        return '';
+      }
+    }
   };
 
   // The available tokens expressed as enum flags so they can be checked with
@@ -131,11 +199,11 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
   var errors = exports.errors = {
       unexpected: 'unexpected %1 \'%2\' near \'%3\''
+    , unexpectedEOF: 'unexpected symbol near \'<eof>\''
     , expected: '\'%1\' expected near \'%2\''
     , expectedToken: '%1 expected near \'%2\''
     , unfinishedString: 'unfinished string near \'%1\''
     , malformedNumber: 'malformed number near \'%1\''
-    , invalidVar: 'invalid left-hand side of assignment near \'%1\''
     , decimalEscapeTooLarge: 'decimal escape too large near \'%1\''
     , invalidEscape: 'invalid escape sequence near \'%1\''
     , hexadecimalDigitExpected: 'hexadecimal digit expected near \'%1\''
@@ -143,6 +211,13 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     , tooLargeCodepoint: 'UTF-8 value too large near \'%1\''
     , unfinishedLongString: 'unfinished long string (starting at line %1) near \'%2\''
     , unfinishedLongComment: 'unfinished long comment (starting at line %1) near \'%2\''
+    , ambiguousSyntax: 'ambiguous syntax (function call x new statement) near \'%1\''
+    , noLoopToBreak: 'no loop to break near \'%1\''
+    , labelAlreadyDefined: 'label \'%1\' already defined on line %2'
+    , labelNotVisible: 'no visible label \'%1\' for <goto>'
+    , gotoJumpInLocalScope: '<goto %1> jumps into the scope of local \'%2\''
+    , cannotUseVararg: 'cannot use \'...\' outside a vararg function near \'%1\''
+    , invalidCodeUnit: 'code unit U+%1 is not allowed in the current encoding mode'
   };
 
   // ### Abstract Syntax Tree
@@ -425,11 +500,19 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
   var slice = Array.prototype.slice
     , toString = Object.prototype.toString
-    , indexOf = function indexOf(array, element) {
-      for (var i = 0, length = array.length; i < length; ++i) {
-        if (array[i] === element) return i;
-      }
-      return -1;
+    ;
+
+  var indexOf = /* istanbul ignore next */ function (array, element) {
+    for (var i = 0, length = array.length; i < length; ++i) {
+      if (array[i] === element) return i;
+    }
+    return -1;
+  };
+
+  /* istanbul ignore else */
+  if (Array.prototype.indexOf)
+    indexOf = function (array, element) {
+      return array.indexOf(element);
     };
 
   // Iterate through an array of objects and return the index of an object
@@ -458,30 +541,47 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     return format;
   }
 
-  // Returns a new object with the properties from all objectes passed as
-  // arguments. Last argument takes precedence.
-  //
-  // Example:
-  //
-  //     this.options = extend(options, { output: false });
+  // Polyfill for `Object.assign`.
 
-  function extend() {
-    var args = slice.call(arguments)
-      , dest = {}
+  var assign = /* istanbul ignore next */ function (dest) {
+    var args = slice.call(arguments, 1)
       , src, prop;
 
     for (var i = 0, length = args.length; i < length; ++i) {
       src = args[i];
       for (prop in src)
         /* istanbul ignore else */
-        if (src.hasOwnProperty(prop)) {
+        if (Object.prototype.hasOwnProperty.call(src, prop)) {
           dest[prop] = src[prop];
         }
     }
+
     return dest;
-  }
+  };
+
+  /* istanbul ignore else */
+  if (Object.assign)
+    assign = Object.assign;
 
   // ### Error functions
+
+  exports.SyntaxError = SyntaxError;
+
+  // XXX: Eliminate this function and change the error type to be different from SyntaxError.
+  // This will unfortunately be a breaking change, because some downstream users depend
+  // on the error thrown being an instance of SyntaxError. For example, the Ace editor:
+  // <https://github.com/ajaxorg/ace/blob/4c7e5eb3f5d5ca9434847be51834a4e41661b852/lib/ace/mode/lua_worker.js#L55>
+
+  function fixupError(e) {
+    /* istanbul ignore if */
+    if (!Object.create)
+      return e;
+    return Object.create(e, {
+      'line': { 'writable': true, value: e.line },
+      'index': { 'writable': true, value: e.index },
+      'column': { 'writable': true, value: e.column }
+    });
+  }
 
   // #### Raise an exception.
   //
@@ -500,20 +600,27 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     var message = sprintf.apply(null, slice.call(arguments, 1))
       , error, col;
 
-    if ('undefined' !== typeof token.line) {
-      col = token.range[0] - token.lineStart;
-      error = new SyntaxError(sprintf('[%1:%2] %3', token.line, col, message));
-      error.line = token.line;
-      error.index = token.range[0];
-      error.column = col;
-    } else {
+    if (token === null || typeof token.line === 'undefined') {
       col = index - lineStart + 1;
-      error = new SyntaxError(sprintf('[%1:%2] %3', line, col, message));
+      error = fixupError(new SyntaxError(sprintf('[%1:%2] %3', line, col, message)));
       error.index = index;
       error.line = line;
       error.column = col;
+    } else {
+      col = token.range[0] - token.lineStart;
+      error = fixupError(new SyntaxError(sprintf('[%1:%2] %3', token.line, col, message)));
+      error.line = token.line;
+      error.index = token.range[0];
+      error.column = col;
     }
     throw error;
+  }
+
+  function tokenValue(token) {
+    var raw = input.slice(token.range[0], token.range[1]);
+    if (raw)
+      return raw;
+    return token.value;
   }
 
   // #### Raise an unexpected token error.
@@ -524,7 +631,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
   //     raiseUnexpectedToken('<name>', token);
 
   function raiseUnexpectedToken(type, token) {
-    raise(token, errors.expectedToken, type, token.value);
+    raise(token, errors.expectedToken, type, tokenValue(token));
   }
 
   // #### Raise a general unexpected error
@@ -541,7 +648,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
   // If there's no token in the buffer it means we have reached <eof>.
 
   function unexpected(found) {
-    var near = lookahead.value;
+    var near = tokenValue(lookahead);
     if ('undefined' !== typeof found.type) {
       var type;
       switch (found.type) {
@@ -553,8 +660,10 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
         case BooleanLiteral:  type = 'boolean';     break;
         case NilLiteral:
           return raise(found, errors.unexpected, 'symbol', 'nil', near);
+        case EOF:
+          return raise(found, errors.unexpectedEOF);
       }
-      return raise(found, errors.unexpected, type, found.value, near);
+      return raise(found, errors.unexpected, type, tokenValue(found), near);
     }
     return raise(found, errors.unexpected, 'symbol', found, near);
   }
@@ -635,25 +744,25 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
         return scanPunctuator('=');
 
       case 62: // >
-        if (options.luaVersion === '5.3')
+        if (features.bitwiseOperators)
           if (62 === next) return scanPunctuator('>>');
         if (61 === next) return scanPunctuator('>=');
         return scanPunctuator('>');
 
       case 60: // <
-        if (options.luaVersion === '5.3')
+        if (features.bitwiseOperators)
           if (60 === next) return scanPunctuator('<<');
         if (61 === next) return scanPunctuator('<=');
         return scanPunctuator('<');
 
       case 126: // ~
         if (61 === next) return scanPunctuator('~=');
-        if ((options.luaVersion === '5.1') || (options.luaVersion === '5.2'))
+        if (!features.bitwiseOperators)
           break;
         return scanPunctuator('~');
 
       case 58: // :
-        if ((options.luaVersion === '5.2') || (options.luaVersion === '5.3'))
+        if (features.labels)
           if (58 === next) return scanPunctuator('::');
         return scanPunctuator(':');
 
@@ -664,12 +773,12 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
       case 47: // /
         // Check for integer division op (//)
-        if (options.luaVersion === '5.3')
+        if (features.integerDivision)
           if (47 === next) return scanPunctuator('//');
         return scanPunctuator('/');
 
       case 38: case 124: // & |
-        if ((options.luaVersion === '5.1') || (options.luaVersion === '5.2'))
+        if (!features.bitwiseOperators)
           break;
 
         /* fall through */
@@ -723,7 +832,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     // Slicing the input string is prefered before string concatenation in a
     // loop for performance reasons.
     while (isIdentifierPart(input.charCodeAt(++index)));
-    value = input.slice(tokenStart, index);
+    value = encodingMode.fixup(input.slice(tokenStart, index));
 
     // Decide on the token type and possibly cast the value.
     if (isKeyword(value)) {
@@ -781,24 +890,33 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
       , beginLine = line
       , beginLineStart = lineStart
       , stringStart = index
-      , string = ''
+      , string = encodingMode.discardStrings ? null : ''
       , charCode;
 
-    while (index < length) {
+    for (;;) {
       charCode = input.charCodeAt(index++);
       if (delimiter === charCode) break;
-      if (92 === charCode) { // backslash
-        string += input.slice(stringStart, index - 1) + readEscapeSequence();
-        stringStart = index;
-      }
       // EOF or `\n` terminates a string literal. If we haven't found the
       // ending delimiter by now, raise an exception.
-      else if (index >= length || isLineTerminator(charCode)) {
+      if (index > length || isLineTerminator(charCode)) {
         string += input.slice(stringStart, index - 1);
-        raise({}, errors.unfinishedString, string + String.fromCharCode(charCode));
+        raise(null, errors.unfinishedString, input.slice(tokenStart, index - 1));
+      }
+      if (92 === charCode) { // backslash
+        if (!encodingMode.discardStrings) {
+          var beforeEscape = input.slice(stringStart, index - 1);
+          string += encodingMode.fixup(beforeEscape);
+        }
+        var escapeValue = readEscapeSequence();
+        if (!encodingMode.discardStrings)
+          string += escapeValue;
+        stringStart = index;
       }
     }
-    string += input.slice(stringStart, index - 1);
+    if (!encodingMode.discardStrings) {
+      string += encodingMode.encodeByte(null);
+      string += encodingMode.fixup(input.slice(stringStart, index - 1));
+    }
 
     return {
         type: StringLiteral
@@ -820,11 +938,11 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
       , beginLineStart = lineStart
       , string = readLongString(false);
     // Fail if it's not a multiline literal.
-    if (false === string) raise(token, errors.expected, '[', token.value);
+    if (false === string) raise(token, errors.expected, '[', tokenValue(token));
 
     return {
         type: StringLiteral
-      , value: string
+      , value: encodingMode.discardStrings ? null : encodingMode.fixup(string)
       , line: beginLine
       , lineStart: beginLineStart
       , lastLine: line
@@ -843,16 +961,69 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     var character = input.charAt(index)
       , next = input.charAt(index + 1);
 
-    var value = ('0' === character && 'xX'.indexOf(next || null) >= 0) ?
+    var literal = ('0' === character && 'xX'.indexOf(next || null) >= 0) ?
       readHexLiteral() : readDecLiteral();
+
+    var foundImaginaryUnit = readImaginaryUnitSuffix()
+      , foundInt64Suffix = readInt64Suffix();
+
+    if (foundInt64Suffix && (foundImaginaryUnit || literal.hasFractionPart)) {
+      raise(null, errors.malformedNumber, input.slice(tokenStart, index));
+    }
 
     return {
         type: NumericLiteral
-      , value: value
+      , value: literal.value
       , line: line
       , lineStart: lineStart
       , range: [tokenStart, index]
     };
+  }
+
+  function readImaginaryUnitSuffix() {
+    if (!features.imaginaryNumbers) return;
+
+    // Imaginary unit number suffix is optional.
+    // See http://luajit.org/ext_ffi_api.html#literals
+    if ('iI'.indexOf(input.charAt(index) || null) >= 0) {
+      ++index;
+      return true;
+    } else {
+      return false;
+    }
+  }
+
+  function readInt64Suffix() {
+    if (!features.integerSuffixes) return;
+
+    // Int64/uint64 number suffix is optional.
+    // See http://luajit.org/ext_ffi_api.html#literals
+
+    if ('uU'.indexOf(input.charAt(index) || null) >= 0) {
+      ++index;
+      if ('lL'.indexOf(input.charAt(index) || null) >= 0) {
+        ++index;
+        if ('lL'.indexOf(input.charAt(index) || null) >= 0) {
+          ++index;
+          return 'ULL';
+        } else {
+          // UL but no L
+          raise(null, errors.malformedNumber, input.slice(tokenStart, index));
+        }
+      } else {
+        // U but no L
+        raise(null, errors.malformedNumber, input.slice(tokenStart, index));
+      }
+    } else if ('lL'.indexOf(input.charAt(index) || null) >= 0) {
+        ++index;
+        if ('lL'.indexOf(input.charAt(index) || null) >= 0) {
+          ++index;
+          return 'LL';
+        } else {
+          // First L but no second L
+          raise(null, errors.malformedNumber, input.slice(tokenStart, index));
+        }
+    }
   }
 
   // Lua hexadecimals have an optional fraction part and an optional binary
@@ -875,14 +1046,16 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
     // A minimum of one hex digit is required.
     if (!isHexDigit(input.charCodeAt(index)))
-      raise({}, errors.malformedNumber, input.slice(tokenStart, index));
+      raise(null, errors.malformedNumber, input.slice(tokenStart, index));
 
     while (isHexDigit(input.charCodeAt(index))) ++index;
     // Convert the hexadecimal digit to base 10.
     digit = parseInt(input.slice(digitStart, index), 16);
 
-    // Fraction part i optional.
+    // Fraction part is optional.
+    var foundFraction = false;
     if ('.' === input.charAt(index)) {
+      foundFraction = true;
       fractionStart = ++index;
 
       while (isHexDigit(input.charCodeAt(index))) ++index;
@@ -895,7 +1068,9 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     }
 
     // Binary exponents are optional
+    var foundBinaryExponent = false;
     if ('pP'.indexOf(input.charAt(index) || null) >= 0) {
+      foundBinaryExponent = true;
       ++index;
 
       // Sign part is optional and defaults to 1 (positive).
@@ -906,7 +1081,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
       // The binary exponent sign requires a decimal digit.
       if (!isDecDigit(input.charCodeAt(index)))
-        raise({}, errors.malformedNumber, input.slice(tokenStart, index));
+        raise(null, errors.malformedNumber, input.slice(tokenStart, index));
 
       while (isDecDigit(input.charCodeAt(index))) ++index;
       binaryExponent = input.slice(exponentStart, index);
@@ -915,7 +1090,10 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
       binaryExponent = Math.pow(2, binaryExponent * binarySign);
     }
 
-    return (digit + fraction) * binaryExponent;
+    return {
+      value: (digit + fraction) * binaryExponent,
+      hasFractionPart: foundFraction || foundBinaryExponent
+    };
   }
 
   // Decimal numbers are exactly the same in Lua and in JavaScript, because of
@@ -925,59 +1103,41 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
   function readDecLiteral() {
     while (isDecDigit(input.charCodeAt(index))) ++index;
     // Fraction part is optional
+    var foundFraction = false;
     if ('.' === input.charAt(index)) {
+      foundFraction = true;
       ++index;
       // Fraction part defaults to 0
       while (isDecDigit(input.charCodeAt(index))) ++index;
     }
+
     // Exponent part is optional.
+    var foundExponent = false;
     if ('eE'.indexOf(input.charAt(index) || null) >= 0) {
+      foundExponent = true;
       ++index;
       // Sign part is optional.
       if ('+-'.indexOf(input.charAt(index) || null) >= 0) ++index;
       // An exponent is required to contain at least one decimal digit.
       if (!isDecDigit(input.charCodeAt(index)))
-        raise({}, errors.malformedNumber, input.slice(tokenStart, index));
+        raise(null, errors.malformedNumber, input.slice(tokenStart, index));
 
       while (isDecDigit(input.charCodeAt(index))) ++index;
     }
 
-    return parseFloat(input.slice(tokenStart, index));
-  }
-
-  function encodeUTF8(codepoint) {
-    if (codepoint < 0x80) {
-      return String.fromCharCode(codepoint);
-    } else if (codepoint < 0x800) {
-      return String.fromCharCode(
-        0xc0 |  (codepoint >>  6)        ,
-        0x80 | ( codepoint        & 0x3f)
-      );
-    } else if (codepoint < 0x10000) {
-      return String.fromCharCode(
-        0xe0 |  (codepoint >> 12)        ,
-        0x80 | ((codepoint >>  6) & 0x3f),
-        0x80 | ( codepoint        & 0x3f)
-      );
-    } else if (codepoint < 0x110000) {
-      return String.fromCharCode(
-        0xf0 |  (codepoint >> 18)        ,
-        0x80 | ((codepoint >> 12) & 0x3f),
-        0x80 | ((codepoint >>  6) & 0x3f),
-        0x80 | ( codepoint        & 0x3f)
-      );
-    } else {
-      return null;
-    }
+    return {
+      value: parseFloat(input.slice(tokenStart, index)),
+      hasFractionPart: foundFraction || foundExponent
+    };
   }
 
   function readUnicodeEscapeSequence() {
     var sequenceStart = index++;
 
     if (input.charAt(index++) !== '{')
-      raise({}, errors.braceExpected, '{', '\\' + input.slice(sequenceStart, index));
+      raise(null, errors.braceExpected, '{', '\\' + input.slice(sequenceStart, index));
     if (!isHexDigit(input.charCodeAt(index)))
-      raise({}, errors.hexadecimalDigitExpected, '\\' + input.slice(sequenceStart, index));
+      raise(null, errors.hexadecimalDigitExpected, '\\' + input.slice(sequenceStart, index));
 
     while (input.charCodeAt(index) === 0x30) ++index;
     var escStart = index;
@@ -985,46 +1145,25 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     while (isHexDigit(input.charCodeAt(index))) {
       ++index;
       if (index - escStart > 6)
-        raise({}, errors.tooLargeCodepoint, '\\' + input.slice(sequenceStart, index));
+        raise(null, errors.tooLargeCodepoint, '\\' + input.slice(sequenceStart, index));
     }
 
     var b = input.charAt(index++);
     if (b !== '}') {
       if ((b === '"') || (b === "'"))
-        raise({}, errors.braceExpected, '}', '\\' + input.slice(sequenceStart, index--));
+        raise(null, errors.braceExpected, '}', '\\' + input.slice(sequenceStart, index--));
       else
-        raise({}, errors.hexadecimalDigitExpected, '\\' + input.slice(sequenceStart, index));
+        raise(null, errors.hexadecimalDigitExpected, '\\' + input.slice(sequenceStart, index));
     }
 
-    var codepoint = parseInt(input.slice(escStart, index - 1), 16);
+    var codepoint = parseInt(input.slice(escStart, index - 1) || '0', 16);
+    var frag = '\\' + input.slice(sequenceStart, index);
 
-    /* Now we have a codepoint number in a variable; encode it in UTF-8,
-     * interpreting each code unit as a code point number, as if we were reading
-     * a UTF-8 file using the ISO-8859-1 encoding. This is wasteful, but at least
-     * it preserves the property that literals that denote the same byte sequence
-     * are interpreted identically, i.e.
-     *
-     * "\u{1f4a9}" == "\xf0\x9f\x92\xa9" == "\240\159\146\169"
-     *
-     * Some other options to consider:
-     *
-     * @ Use an ArrayBuffer or Uint8Array for string literal values
-     *   - Cannot be serialised as JSON
-     *   - May fail to be portable to older JavaScript engines
-     * @ Store string literal values as code point strings, and require that
-     *   escape sequences constitute well-formed UTF-8; throw an exception
-     *   if they do not
-     *   - Reduced compatibility with PUC Lua
-     * @ Like above, but transform ill-formed escapes to unpaired surrogates,
-     *   just like Python's 'surrogateescape' encoding error handler
-     *   - Destroys the property that ("\xc4" .. "\x99") == "\xc4\x99"
-     *   - If the AST is encoded in JSON, some JSON libraries may refuse to parse it
-     */
-    codepoint = encodeUTF8(codepoint);
-    if (codepoint === null) {
-      raise({}, errors.tooLargeCodepoint, '\\' + input.slice(sequenceStart, index));
+    if (codepoint > 0x10ffff) {
+      raise(null, errors.tooLargeCodepoint, frag);
     }
-    return codepoint;
+
+    return encodingMode.encodeUTF8(codepoint, frag);
   }
 
   // Translate escape sequences to the actual characters.
@@ -1053,46 +1192,45 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
         // \ddd, where ddd is a sequence of up to three decimal digits.
         while (isDecDigit(input.charCodeAt(index)) && index - sequenceStart < 3) ++index;
 
-        var ddd = parseInt(input.slice(sequenceStart, index), 10);
+        var frag = input.slice(sequenceStart, index);
+        var ddd = parseInt(frag, 10);
         if (ddd > 255) {
-          raise({}, errors.decimalEscapeTooLarge, '\\' + ddd);
+          raise(null, errors.decimalEscapeTooLarge, '\\' + ddd);
         }
-        return String.fromCharCode(ddd);
+        return encodingMode.encodeByte(ddd, '\\' + frag);
 
       case 'z':
-        if ((options.luaVersion === '5.2') || (options.luaVersion === '5.3')) {
+        if (features.skipWhitespaceEscape) {
           ++index;
           skipWhiteSpace();
           return '';
         }
+        break;
 
-        /* fall through */
       case 'x':
-        if ((options.luaVersion === '5.2') || (options.luaVersion === '5.3')) {
+        if (features.hexEscapes) {
           // \xXX, where XX is a sequence of exactly two hexadecimal digits
           if (isHexDigit(input.charCodeAt(index + 1)) &&
               isHexDigit(input.charCodeAt(index + 2))) {
             index += 3;
-            return String.fromCharCode(parseInt(input.slice(sequenceStart + 1, index), 16));
+            return encodingMode.encodeByte(parseInt(input.slice(sequenceStart + 1, index), 16), '\\' + input.slice(sequenceStart, index));
           }
-          raise({}, errors.hexadecimalDigitExpected, '\\' + input.slice(sequenceStart, index + 2));
+          raise(null, errors.hexadecimalDigitExpected, '\\' + input.slice(sequenceStart, index + 2));
         }
+        break;
 
-        /* fall through */
       case 'u':
-        if (options.luaVersion === '5.3') {
+        if (features.unicodeEscapes)
           return readUnicodeEscapeSequence();
-        }
+        break;
 
-        /* fall through */
-      default:
-        if ((options.luaVersion === '5.2') || (options.luaVersion === '5.3'))
-          raise({}, errors.invalidEscape, '\\' + input.slice(sequenceStart, index + 1));
-
-        /* fall through */
       case '\\': case '"': case "'":
         return input.charAt(index++);
     }
+
+    if (features.strictEscapes)
+      raise(null, errors.invalidEscape, '\\' + input.slice(sequenceStart, index + 1));
+    return input.charAt(index++);
   }
 
   // Comments begin with -- after which it will be decided if they are
@@ -1171,7 +1309,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     while (index < length) {
       // To keep track of line numbers run the `consumeEOL()` which increments
       // its counter.
-      if (isLineTerminator(input.charCodeAt(index))) consumeEOL();
+      while (isLineTerminator(input.charCodeAt(index))) consumeEOL();
 
       character = input.charAt(index++);
 
@@ -1193,9 +1331,9 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
       }
     }
 
-    raise({}, isComment ?
-              errors.unfinishedLongComment :
-              errors.unfinishedLongString,
+    raise(null, isComment ?
+                errors.unfinishedLongComment :
+                errors.unfinishedLongString,
           firstLine, '<eof>');
   }
 
@@ -1227,7 +1365,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
   function expect(value) {
     if (value === token.value) next();
-    else raise(token, errors.expected, value, token.value);
+    else raise(token, errors.expected, value, tokenValue(token));
   }
 
   // ### Validation functions
@@ -1249,14 +1387,23 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
   }
 
   // From [Lua 5.2](http://www.lua.org/manual/5.2/manual.html#8.1) onwards
-  // identifiers cannot use locale-dependet letters.
+  // identifiers cannot use 'locale-dependent' letters (i.e. dependent on the C locale).
+  // On the other hand, LuaJIT allows arbitrary octets ≥ 128 in identifiers.
 
   function isIdentifierStart(charCode) {
-    return (charCode >= 65 && charCode <= 90) || (charCode >= 97 && charCode <= 122) || 95 === charCode;
+    if ((charCode >= 65 && charCode <= 90) || (charCode >= 97 && charCode <= 122) || 95 === charCode)
+      return true;
+    if (features.extendedIdentifiers && charCode >= 128)
+      return true;
+    return false;
   }
 
   function isIdentifierPart(charCode) {
-    return (charCode >= 65 && charCode <= 90) || (charCode >= 97 && charCode <= 122) || 95 === charCode || (charCode >= 48 && charCode <= 57);
+    if ((charCode >= 65 && charCode <= 90) || (charCode >= 97 && charCode <= 122) || 95 === charCode || (charCode >= 48 && charCode <= 57))
+      return true;
+    if (features.extendedIdentifiers && charCode >= 128)
+      return true;
+    return false;
   }
 
   // [3.1 Lexical Conventions](http://www.lua.org/manual/5.2/manual.html#3.1)
@@ -1272,7 +1419,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
       case 4:
         if ('else' === id || 'then' === id)
           return true;
-        if ((options.luaVersion === '5.2') || (options.luaVersion === '5.3'))
+        if (features.labels && !features.contextualGoto)
           return ('goto' === id);
         return false;
       case 5:
@@ -1288,17 +1435,6 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
   function isUnary(token) {
     if (Punctuator === token.type) return '#-~'.indexOf(token.value) >= 0;
     if (Keyword === token.type) return 'not' === token.value;
-    return false;
-  }
-
-  // @TODO this needs to be rethought.
-  function isCallExpression(expression) {
-    switch (expression.type) {
-      case 'CallExpression':
-      case 'TableCallExpression':
-      case 'StringCallExpression':
-        return true;
-    }
     return false;
   }
 
@@ -1329,7 +1465,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
   // Create a new scope inheriting all declarations from the previous scope.
   function createScope() {
-    var scope = Array.apply(null, scopes[scopeDepth++]);
+    var scope = scopes[scopeDepth++].slice();
     scopes.push(scope);
     if (options.onCreateScope) options.onCreateScope();
   }
@@ -1337,7 +1473,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
   // Exit and remove the current scope.
   function destroyScope() {
     var scope = scopes.pop();
-    scopeDepth--;
+    --scopeDepth;
     if (options.onDestroyScope) options.onDestroyScope();
   }
 
@@ -1442,6 +1578,156 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     if (trackLocations) locations.push(marker);
   }
 
+  // Control flow tracking
+  // ---------------------
+  // A context object that validates loop breaks and `goto`-based control flow.
+
+  function FullFlowContext() {
+    this.scopes = [];
+    this.pendingGotos = [];
+  }
+
+  FullFlowContext.prototype.isInLoop = function () {
+    var i = this.scopes.length;
+    while (i --> 0) {
+      if (this.scopes[i].isLoop)
+        return true;
+    }
+    return false;
+  };
+
+  FullFlowContext.prototype.pushScope = function (isLoop) {
+    var scope = {
+      labels: {},
+      locals: [],
+      deferredGotos: [],
+      isLoop: !!isLoop
+    };
+    this.scopes.push(scope);
+  };
+
+  FullFlowContext.prototype.popScope = function () {
+    for (var i = 0; i < this.pendingGotos.length; ++i) {
+      var theGoto = this.pendingGotos[i];
+      if (theGoto.maxDepth >= this.scopes.length)
+        if (--theGoto.maxDepth <= 0)
+          raise(theGoto.token, errors.labelNotVisible, theGoto.target);
+    }
+
+    this.scopes.pop();
+  };
+
+  FullFlowContext.prototype.addGoto = function (target, token) {
+    var localCounts = [];
+
+    for (var i = 0; i < this.scopes.length; ++i) {
+      var scope = this.scopes[i];
+      localCounts.push(scope.locals.length);
+      if (Object.prototype.hasOwnProperty.call(scope.labels, target))
+        return;
+    }
+
+    this.pendingGotos.push({
+      maxDepth: this.scopes.length,
+      target: target,
+      token: token,
+      localCounts: localCounts
+    });
+  };
+
+  FullFlowContext.prototype.addLabel = function (name, token) {
+    var scope = this.currentScope();
+
+    if (Object.prototype.hasOwnProperty.call(scope.labels, name)) {
+      raise(token, errors.labelAlreadyDefined, name, scope.labels[name].line);
+    } else {
+      var newGotos = [];
+
+      for (var i = 0; i < this.pendingGotos.length; ++i) {
+        var theGoto = this.pendingGotos[i];
+
+        if (theGoto.maxDepth >= this.scopes.length && theGoto.target === name) {
+          if (theGoto.localCounts[this.scopes.length - 1] < scope.locals.length) {
+            scope.deferredGotos.push(theGoto);
+          }
+          continue;
+        }
+
+        newGotos.push(theGoto);
+      }
+
+      this.pendingGotos = newGotos;
+    }
+
+    scope.labels[name] = {
+      localCount: scope.locals.length,
+      line: token.line
+    };
+  };
+
+  FullFlowContext.prototype.addLocal = function (name, token) {
+    this.currentScope().locals.push({
+      name: name,
+      token: token
+    });
+  };
+
+  FullFlowContext.prototype.currentScope = function () {
+    return this.scopes[this.scopes.length - 1];
+  };
+
+  FullFlowContext.prototype.raiseDeferredErrors = function () {
+    var scope = this.currentScope();
+    var bads = scope.deferredGotos;
+    for (var i = 0; i < bads.length; ++i) {
+      var theGoto = bads[i];
+      raise(theGoto.token, errors.gotoJumpInLocalScope, theGoto.target, scope.locals[theGoto.localCounts[this.scopes.length - 1]].name);
+    }
+    // Would be dead code currently, but may be useful later
+    // if (bads.length)
+    //   scope.deferredGotos = [];
+  };
+
+  // Simplified context that only checks the validity of loop breaks.
+
+  function LoopFlowContext() {
+    this.level = 0;
+    this.loopLevels = [];
+  }
+
+  LoopFlowContext.prototype.isInLoop = function () {
+    return !!this.loopLevels.length;
+  };
+
+  LoopFlowContext.prototype.pushScope = function (isLoop) {
+    ++this.level;
+    if (isLoop)
+      this.loopLevels.push(this.level);
+  };
+
+  LoopFlowContext.prototype.popScope = function () {
+    var levels = this.loopLevels;
+    var levlen = levels.length;
+    if (levlen) {
+      if (levels[levlen - 1] === this.level)
+        levels.pop();
+    }
+    --this.level;
+  };
+
+  LoopFlowContext.prototype.addGoto =
+  LoopFlowContext.prototype.addLabel =
+  /* istanbul ignore next */
+  function () { throw new Error('This should never happen'); };
+
+  LoopFlowContext.prototype.addLocal =
+  LoopFlowContext.prototype.raiseDeferredErrors =
+  function () {};
+
+  function makeFlowContext() {
+    return features.labels ? new FullFlowContext() : new LoopFlowContext();
+  }
+
   // Parse functions
   // ---------------
 
@@ -1453,7 +1739,11 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     next();
     markLocation();
     if (options.scope) createScope();
-    var body = parseBlock();
+    var flowContext = makeFlowContext();
+    flowContext.allowVararg = true;
+    flowContext.pushScope();
+    var body = parseBlock(flowContext);
+    flowContext.popScope();
     if (options.scope) destroyScope();
     if (EOF !== token.type) unexpected(token);
     // If the body is empty no previousToken exists when finishNode runs.
@@ -1466,17 +1756,18 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
   //
   //     block ::= {stat} [retstat]
 
-  function parseBlock(terminator) {
+  function parseBlock(flowContext) {
     var block = []
       , statement;
 
     while (!isBlockFollow(token)) {
       // Return has to be the last statement in a block.
-      if ('return' === token.value) {
-        block.push(parseStatement());
+      // Likewise 'break' in Lua older than 5.2
+      if ('return' === token.value || (!features.relaxedBreak && 'break' === token.value)) {
+        block.push(parseStatement(flowContext));
         break;
       }
-      statement = parseStatement();
+      statement = parseStatement(flowContext);
       consume(';');
       // Statements are only added if they are returned, this allows us to
       // ignore some statements, such as EmptyStatement.
@@ -1493,54 +1784,71 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
   //          | if | for | function | local | label | assignment
   //          | functioncall | ';'
 
-  function parseStatement() {
+  function parseStatement(flowContext) {
     markLocation();
-    if (Keyword === token.type) {
-      switch (token.value) {
-        case 'local':    next(); return parseLocalStatement();
-        case 'if':       next(); return parseIfStatement();
-        case 'return':   next(); return parseReturnStatement();
-        case 'function': next();
-          var name = parseFunctionName();
-          return parseFunctionDeclaration(name);
-        case 'while':    next(); return parseWhileStatement();
-        case 'for':      next(); return parseForStatement();
-        case 'repeat':   next(); return parseRepeatStatement();
-        case 'break':    next(); return parseBreakStatement();
-        case 'do':       next(); return parseDoStatement();
-        case 'goto':     next(); return parseGotoStatement();
+
+    if (Punctuator === token.type) {
+      if (consume('::')) return parseLabelStatement(flowContext);
+    }
+
+    // When a `;` is encounted, simply eat it without storing it.
+    if (features.emptyStatement) {
+      if (consume(';')) {
+        if (trackLocations) locations.pop();
+        return;
       }
     }
 
-    if (Punctuator === token.type) {
-      if (consume('::')) return parseLabelStatement();
+    flowContext.raiseDeferredErrors();
+
+    if (Keyword === token.type) {
+      switch (token.value) {
+        case 'local':    next(); return parseLocalStatement(flowContext);
+        case 'if':       next(); return parseIfStatement(flowContext);
+        case 'return':   next(); return parseReturnStatement(flowContext);
+        case 'function': next();
+          var name = parseFunctionName();
+          return parseFunctionDeclaration(name);
+        case 'while':    next(); return parseWhileStatement(flowContext);
+        case 'for':      next(); return parseForStatement(flowContext);
+        case 'repeat':   next(); return parseRepeatStatement(flowContext);
+        case 'break':    next();
+          if (!flowContext.isInLoop())
+            raise(token, errors.noLoopToBreak, token.value);
+          return parseBreakStatement();
+        case 'do':       next(); return parseDoStatement(flowContext);
+        case 'goto':     next(); return parseGotoStatement(flowContext);
+      }
     }
-    // Assignments memorizes the location and pushes it manually for wrapper
-    // nodes. Additionally empty `;` statements should not mark a location.
+
+    if (features.contextualGoto &&
+        token.type === Identifier && token.value === 'goto' &&
+        lookahead.type === Identifier && lookahead.value !== 'goto') {
+      next(); return parseGotoStatement(flowContext);
+    }
+
+    // Assignments memorizes the location and pushes it manually for wrapper nodes.
     if (trackLocations) locations.pop();
 
-    // When a `;` is encounted, simply eat it without storing it.
-    if (options.luaVersion === '5.2' || options.luaVersion === '5.3') {
-      if (consume(';')) return;
-    }
-
-    return parseAssignmentOrCallStatement();
+    return parseAssignmentOrCallStatement(flowContext);
   }
 
   // ## Statements
 
   //     label ::= '::' Name '::'
 
-  function parseLabelStatement() {
-    var name = token.value
+  function parseLabelStatement(flowContext) {
+    var nameToken = token
       , label = parseIdentifier();
 
     if (options.scope) {
-      scopeIdentifierName('::' + name + '::');
+      scopeIdentifierName('::' + nameToken.value + '::');
       attachScope(label, true);
     }
 
     expect('::');
+
+    flowContext.addLabel(nameToken.value, nameToken);
     return finishNode(ast.labelStatement(label));
   }
 
@@ -1552,18 +1860,22 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
   //     goto ::= 'goto' Name
 
-  function parseGotoStatement() {
+  function parseGotoStatement(flowContext) {
     var name = token.value
+      , gotoToken = previousToken
       , label = parseIdentifier();
 
+    flowContext.addGoto(name, gotoToken);
     return finishNode(ast.gotoStatement(label));
   }
 
   //     do ::= 'do' block 'end'
 
-  function parseDoStatement() {
+  function parseDoStatement(flowContext) {
     if (options.scope) createScope();
-    var body = parseBlock();
+    flowContext.pushScope();
+    var body = parseBlock(flowContext);
+    flowContext.popScope();
     if (options.scope) destroyScope();
     expect('end');
     return finishNode(ast.doStatement(body));
@@ -1571,11 +1883,13 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
   //     while ::= 'while' exp 'do' block 'end'
 
-  function parseWhileStatement() {
-    var condition = parseExpectedExpression();
+  function parseWhileStatement(flowContext) {
+    var condition = parseExpectedExpression(flowContext);
     expect('do');
     if (options.scope) createScope();
-    var body = parseBlock();
+    flowContext.pushScope(true);
+    var body = parseBlock(flowContext);
+    flowContext.popScope();
     if (options.scope) destroyScope();
     expect('end');
     return finishNode(ast.whileStatement(condition, body));
@@ -1583,25 +1897,28 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
   //     repeat ::= 'repeat' block 'until' exp
 
-  function parseRepeatStatement() {
+  function parseRepeatStatement(flowContext) {
     if (options.scope) createScope();
-    var body = parseBlock();
+    flowContext.pushScope(true);
+    var body = parseBlock(flowContext);
     expect('until');
-    var condition = parseExpectedExpression();
+    flowContext.raiseDeferredErrors();
+    var condition = parseExpectedExpression(flowContext);
+    flowContext.popScope();
     if (options.scope) destroyScope();
     return finishNode(ast.repeatStatement(condition, body));
   }
 
   //     retstat ::= 'return' [exp {',' exp}] [';']
 
-  function parseReturnStatement() {
+  function parseReturnStatement(flowContext) {
     var expressions = [];
 
     if ('end' !== token.value) {
-      var expression = parseExpression();
+      var expression = parseExpression(flowContext);
       if (null != expression) expressions.push(expression);
       while (consume(',')) {
-        expression = parseExpectedExpression();
+        expression = parseExpectedExpression(flowContext);
         expressions.push(expression);
       }
       consume(';'); // grammar tells us ; is optional here.
@@ -1612,7 +1929,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
   //     if ::= 'if' exp 'then' block {elif} ['else' block] 'end'
   //     elif ::= 'elseif' exp 'then' block
 
-  function parseIfStatement() {
+  function parseIfStatement(flowContext) {
     var clauses = []
       , condition
       , body
@@ -1624,20 +1941,24 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
       marker = locations[locations.length - 1];
       locations.push(marker);
     }
-    condition = parseExpectedExpression();
+    condition = parseExpectedExpression(flowContext);
     expect('then');
     if (options.scope) createScope();
-    body = parseBlock();
+    flowContext.pushScope();
+    body = parseBlock(flowContext);
+    flowContext.popScope();
     if (options.scope) destroyScope();
     clauses.push(finishNode(ast.ifClause(condition, body)));
 
     if (trackLocations) marker = createLocationMarker();
     while (consume('elseif')) {
       pushLocation(marker);
-      condition = parseExpectedExpression();
+      condition = parseExpectedExpression(flowContext);
       expect('then');
       if (options.scope) createScope();
-      body = parseBlock();
+      flowContext.pushScope();
+      body = parseBlock(flowContext);
+      flowContext.popScope();
       if (options.scope) destroyScope();
       clauses.push(finishNode(ast.elseifClause(condition, body)));
       if (trackLocations) marker = createLocationMarker();
@@ -1650,7 +1971,9 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
         locations.push(marker);
       }
       if (options.scope) createScope();
-      body = parseBlock();
+      flowContext.pushScope();
+      body = parseBlock(flowContext);
+      flowContext.popScope();
       if (options.scope) destroyScope();
       clauses.push(finishNode(ast.elseClause(body)));
     }
@@ -1666,7 +1989,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
   //     namelist ::= Name {',' Name}
   //     explist ::= exp {',' exp}
 
-  function parseForStatement() {
+  function parseForStatement(flowContext) {
     var variable = parseIdentifier()
       , body;
 
@@ -1681,15 +2004,17 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     // Numeric For Statement.
     if (consume('=')) {
       // Start expression
-      var start = parseExpectedExpression();
+      var start = parseExpectedExpression(flowContext);
       expect(',');
       // End expression
-      var end = parseExpectedExpression();
+      var end = parseExpectedExpression(flowContext);
       // Optional step expression
-      var step = consume(',') ? parseExpectedExpression() : null;
+      var step = consume(',') ? parseExpectedExpression(flowContext) : null;
 
       expect('do');
-      body = parseBlock();
+      flowContext.pushScope(true);
+      body = parseBlock(flowContext);
+      flowContext.popScope();
       expect('end');
       if (options.scope) destroyScope();
 
@@ -1710,12 +2035,14 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
       // One or more expressions in the explist.
       do {
-        var expression = parseExpectedExpression();
+        var expression = parseExpectedExpression(flowContext);
         iterators.push(expression);
       } while (consume(','));
 
       expect('do');
-      body = parseBlock();
+      flowContext.pushScope(true);
+      body = parseBlock(flowContext);
+      flowContext.popScope();
       expect('end');
       if (options.scope) destroyScope();
 
@@ -1733,8 +2060,9 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
   //     local ::= 'local' 'function' Name funcdecl
   //        | 'local' Name {',' Name} ['=' exp {',' exp}]
 
-  function parseLocalStatement() {
-    var name;
+  function parseLocalStatement(flowContext) {
+    var name
+      , declToken = previousToken;
 
     if (Identifier === token.type) {
       var variables = []
@@ -1744,11 +2072,12 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
         name = parseIdentifier();
 
         variables.push(name);
+        flowContext.addLocal(name.name, declToken);
       } while (consume(','));
 
       if (consume('=')) {
         do {
-          var expression = parseExpectedExpression();
+          var expression = parseExpectedExpression(flowContext);
           init.push(expression);
         } while (consume(','));
       }
@@ -1766,6 +2095,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     }
     if (consume('function')) {
       name = parseIdentifier();
+      flowContext.addLocal(name.name, declToken);
 
       if (options.scope) {
         scopeIdentifier(name);
@@ -1779,13 +2109,6 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     }
   }
 
-  function validateVar(node) {
-    // @TODO we need something not dependent on the exact AST used. see also isCallExpression()
-    if (node.inParens || (['Identifier', 'MemberExpression', 'IndexExpression'].indexOf(node.type) === -1)) {
-      raise(token, errors.invalidVar, token.value);
-    }
-  }
-
   //     assignment ::= varlist '=' explist
   //     var ::= Name | prefixexp '[' exp ']' | prefixexp '.' Name
   //     varlist ::= var {',' var}
@@ -1794,48 +2117,86 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
   //     call ::= callexp
   //     callexp ::= prefixexp args | prefixexp ':' Name args
 
-  function parseAssignmentOrCallStatement() {
+  function parseAssignmentOrCallStatement(flowContext) {
     // Keep a reference to the previous token for better error messages in case
     // of invalid statement
     var previous = token
-      , expression, marker;
+      , marker, startMarker;
+    var lvalue, base, name;
 
-    if (trackLocations) marker = createLocationMarker();
-    expression = parsePrefixExpression();
+    var targets = [];
 
-    if (null == expression) return unexpected(token);
-    if (',='.indexOf(token.value) >= 0) {
-      var variables = [expression]
-        , init = []
-        , exp;
+    if (trackLocations) startMarker = createLocationMarker();
 
-      validateVar(expression);
-      while (consume(',')) {
-        exp = parsePrefixExpression();
-        if (null == exp) raiseUnexpectedToken('<expression>', token);
-        validateVar(exp);
-        variables.push(exp);
+    do {
+      if (trackLocations) marker = createLocationMarker();
+
+      if (Identifier === token.type) {
+        name = token.value;
+        base = parseIdentifier();
+        // Set the parent scope.
+        if (options.scope) attachScope(base, scopeHasName(name));
+        lvalue = true;
+      } else if ('(' === token.value) {
+        next();
+        base = parseExpectedExpression(flowContext);
+        expect(')');
+        lvalue = false;
+      } else {
+        return unexpected(token);
       }
-      expect('=');
-      do {
-        exp = parseExpectedExpression();
-        init.push(exp);
-      } while (consume(','));
 
+      both: for (;;) {
+        var newBase;
+
+        switch (StringLiteral === token.type ? '"' : token.value) {
+        case '.':
+        case '[':
+          lvalue = true;
+          break;
+        case ':':
+        case '(':
+        case '{':
+        case '"':
+          lvalue = null;
+          break;
+        default:
+          break both;
+        }
+
+        base = parsePrefixExpressionPart(base, marker, flowContext);
+      }
+
+      targets.push(base);
+
+      if (',' !== token.value)
+        break;
+
+      if (!lvalue) {
+        return unexpected(token);
+      }
+
+      next();
+    } while (true);
+
+    if (targets.length === 1 && lvalue === null) {
       pushLocation(marker);
-      return finishNode(ast.assignmentStatement(variables, init));
+      return finishNode(ast.callStatement(targets[0]));
+    } else if (!lvalue) {
+      return unexpected(token);
     }
-    if (isCallExpression(expression)) {
-      pushLocation(marker);
-      return finishNode(ast.callStatement(expression));
-    }
-    // The prefix expression was neither part of an assignment or a
-    // callstatement, however as it was valid it's been consumed, so raise
-    // the exception on the previous token to provide a helpful message.
-    return unexpected(previous);
+
+    expect('=');
+
+    var values = [];
+
+    do {
+      values.push(parseExpectedExpression(flowContext));
+    } while (consume(','));
+
+    pushLocation(startMarker);
+    return finishNode(ast.assignmentStatement(targets, values));
   }
-
-
 
   // ### Non-statements
 
@@ -1860,6 +2221,9 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
   //     parlist ::= Name {',' Name} | [',' '...'] | '...'
 
   function parseFunctionDeclaration(name, isLocal) {
+    var flowContext = makeFlowContext();
+    flowContext.pushScope();
+
     var parameters = [];
     expect('(');
 
@@ -1876,20 +2240,21 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
           parameters.push(parameter);
 
           if (consume(',')) continue;
-          else if (consume(')')) break;
         }
         // No arguments are allowed after a vararg.
         else if (VarargLiteral === token.type) {
-          parameters.push(parsePrimaryExpression());
-          expect(')');
-          break;
+          flowContext.allowVararg = true;
+          parameters.push(parsePrimaryExpression(flowContext));
         } else {
           raiseUnexpectedToken('<name> or \'...\'', token);
         }
+        expect(')');
+        break;
       }
     }
 
-    var body = parseBlock();
+    var body = parseBlock(flowContext);
+    flowContext.popScope();
     expect('end');
     if (options.scope) destroyScope();
 
@@ -1934,30 +2299,30 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
   //
   //     fieldsep ::= ',' | ';'
 
-  function parseTableConstructor() {
+  function parseTableConstructor(flowContext) {
     var fields = []
       , key, value;
 
     while (true) {
       markLocation();
       if (Punctuator === token.type && consume('[')) {
-        key = parseExpectedExpression();
+        key = parseExpectedExpression(flowContext);
         expect(']');
         expect('=');
-        value = parseExpectedExpression();
+        value = parseExpectedExpression(flowContext);
         fields.push(finishNode(ast.tableKey(key, value)));
       } else if (Identifier === token.type) {
         if ('=' === lookahead.value) {
           key = parseIdentifier();
           next();
-          value = parseExpectedExpression();
+          value = parseExpectedExpression(flowContext);
           fields.push(finishNode(ast.tableKeyString(key, value)));
         } else {
-          value = parseExpectedExpression();
+          value = parseExpectedExpression(flowContext);
           fields.push(finishNode(ast.tableValue(value)));
         }
       } else {
-        if (null == (value = parseExpression())) {
+        if (null == (value = parseExpression(flowContext))) {
           locations.pop();
           break;
         }
@@ -1988,15 +2353,15 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
   //          | '.' Name | ':' Name args | args }
   //
 
-  function parseExpression() {
-    var expression = parseSubExpression(0);
+  function parseExpression(flowContext) {
+    var expression = parseSubExpression(0, flowContext);
     return expression;
   }
 
   // Parse an expression expecting it to be valid.
 
-  function parseExpectedExpression() {
-    var expression = parseExpression();
+  function parseExpectedExpression(flowContext) {
+    var expression = parseExpression(flowContext);
     if (null == expression) raiseUnexpectedToken('<expression>', token);
     else return expression;
   }
@@ -2047,7 +2412,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
   //
   //     exp ::= (unop exp | primary | prefixexp ) { binop exp }
 
-  function parseSubExpression(minPrecedence) {
+  function parseSubExpression(minPrecedence, flowContext) {
     var operator = token.value
     // The left-hand side in binary operations.
       , expression, marker;
@@ -2058,17 +2423,17 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     if (isUnary(token)) {
       markLocation();
       next();
-      var argument = parseSubExpression(10);
+      var argument = parseSubExpression(10, flowContext);
       if (argument == null) raiseUnexpectedToken('<expression>', token);
       expression = finishNode(ast.unaryExpression(operator, argument));
     }
     if (null == expression) {
       // PrimaryExpression
-      expression = parsePrimaryExpression();
+      expression = parsePrimaryExpression(flowContext);
 
       // PrefixExpression
       if (null == expression) {
-        expression = parsePrefixExpression();
+        expression = parsePrefixExpression(flowContext);
       }
     }
     // This is not a valid left hand expression.
@@ -2083,9 +2448,9 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
       if (precedence === 0 || precedence <= minPrecedence) break;
       // Right-hand precedence operators
-      if ('^' === operator || '..' === operator) precedence--;
+      if ('^' === operator || '..' === operator) --precedence;
       next();
-      var right = parseSubExpression(precedence);
+      var right = parseSubExpression(precedence, flowContext);
       if (null == right) raiseUnexpectedToken('<expression>', token);
       // Push in the marker created before the loop to wrap its entirety.
       if (trackLocations) locations.push(marker);
@@ -2101,7 +2466,44 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
   //
   //     args ::= '(' [explist] ')' | tableconstructor | String
 
-  function parsePrefixExpression() {
+  function parsePrefixExpressionPart(base, marker, flowContext) {
+    var expression, identifier;
+
+    if (Punctuator === token.type) {
+      switch (token.value) {
+        case '[':
+          pushLocation(marker);
+          next();
+          expression = parseExpectedExpression(flowContext);
+          expect(']');
+          return finishNode(ast.indexExpression(base, expression));
+        case '.':
+          pushLocation(marker);
+          next();
+          identifier = parseIdentifier();
+          return finishNode(ast.memberExpression(base, '.', identifier));
+        case ':':
+          pushLocation(marker);
+          next();
+          identifier = parseIdentifier();
+          base = finishNode(ast.memberExpression(base, ':', identifier));
+          // Once a : is found, this has to be a CallExpression, otherwise
+          // throw an error.
+          pushLocation(marker);
+          return parseCallExpression(base, flowContext);
+        case '(': case '{': // args
+          pushLocation(marker);
+          return parseCallExpression(base, flowContext);
+      }
+    } else if (StringLiteral === token.type) {
+      pushLocation(marker);
+      return parseCallExpression(base, flowContext);
+    }
+
+    return null;
+  }
+
+  function parsePrefixExpression(flowContext) {
     var base, name, marker;
 
     if (trackLocations) marker = createLocationMarker();
@@ -2113,54 +2515,18 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
       // Set the parent scope.
       if (options.scope) attachScope(base, scopeHasName(name));
     } else if (consume('(')) {
-      base = parseExpectedExpression();
+      base = parseExpectedExpression(flowContext);
       expect(')');
-      base.inParens = true; // XXX: quick and dirty. needed for validateVar
     } else {
       return null;
     }
 
     // The suffix
-    var expression, identifier;
-    while (true) {
-      if (Punctuator === token.type) {
-        switch (token.value) {
-          case '[':
-            pushLocation(marker);
-            next();
-            expression = parseExpectedExpression();
-            expect(']');
-            base = finishNode(ast.indexExpression(base, expression));
-            break;
-          case '.':
-            pushLocation(marker);
-            next();
-            identifier = parseIdentifier();
-            base = finishNode(ast.memberExpression(base, '.', identifier));
-            break;
-          case ':':
-            pushLocation(marker);
-            next();
-            identifier = parseIdentifier();
-            base = finishNode(ast.memberExpression(base, ':', identifier));
-            // Once a : is found, this has to be a CallExpression, otherwise
-            // throw an error.
-            pushLocation(marker);
-            base = parseCallExpression(base);
-            break;
-          case '(': case '{': // args
-            pushLocation(marker);
-            base = parseCallExpression(base);
-            break;
-          default:
-            return base;
-        }
-      } else if (StringLiteral === token.type) {
-        pushLocation(marker);
-        base = parseCallExpression(base);
-      } else {
+    for (;;) {
+      var newBase = parsePrefixExpressionPart(base, marker, flowContext);
+      if (newBase === null)
         break;
-      }
+      base = newBase;
     }
 
     return base;
@@ -2168,18 +2534,22 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
   //     args ::= '(' [explist] ')' | tableconstructor | String
 
-  function parseCallExpression(base) {
+  function parseCallExpression(base, flowContext) {
     if (Punctuator === token.type) {
       switch (token.value) {
         case '(':
+          if (!features.emptyStatement) {
+            if (token.line !== previousToken.line)
+              raise(null, errors.ambiguousSyntax, token.value);
+          }
           next();
 
           // List of expressions
           var expressions = [];
-          var expression = parseExpression();
+          var expression = parseExpression(flowContext);
           if (null != expression) expressions.push(expression);
           while (consume(',')) {
-            expression = parseExpectedExpression();
+            expression = parseExpectedExpression(flowContext);
             expressions.push(expression);
           }
 
@@ -2189,11 +2559,11 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
         case '{':
           markLocation();
           next();
-          var table = parseTableConstructor();
+          var table = parseTableConstructor(flowContext);
           return finishNode(ast.tableCallExpression(base, table));
       }
     } else if (StringLiteral === token.type) {
-      return finishNode(ast.stringCallExpression(base, parsePrimaryExpression()));
+      return finishNode(ast.stringCallExpression(base, parsePrimaryExpression(flowContext)));
     }
 
     raiseUnexpectedToken('function arguments', token);
@@ -2202,13 +2572,17 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
   //     primary ::= String | Numeric | nil | true | false
   //          | functiondef | tableconstructor | '...'
 
-  function parsePrimaryExpression() {
+  function parsePrimaryExpression(flowContext) {
     var literals = StringLiteral | NumericLiteral | BooleanLiteral | NilLiteral | VarargLiteral
       , value = token.value
       , type = token.type
       , marker;
 
     if (trackLocations) marker = createLocationMarker();
+
+    if (type === VarargLiteral && !flowContext.allowVararg) {
+      raise(token, errors.cannotUseVararg, token.value);
+    }
 
     if (type & literals) {
       pushLocation(marker);
@@ -2222,7 +2596,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
       return parseFunctionDeclaration(null);
     } else if (consume('{')) {
       pushLocation(marker);
-      return parseTableConstructor();
+      return parseTableConstructor(flowContext);
     }
   }
 
@@ -2251,6 +2625,43 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
   exports.parse = parse;
 
+  var versionFeatures = {
+    '5.1': {
+    },
+    '5.2': {
+      labels: true,
+      emptyStatement: true,
+      hexEscapes: true,
+      skipWhitespaceEscape: true,
+      strictEscapes: true,
+      relaxedBreak: true
+    },
+    '5.3': {
+      labels: true,
+      emptyStatement: true,
+      hexEscapes: true,
+      skipWhitespaceEscape: true,
+      strictEscapes: true,
+      unicodeEscapes: true,
+      bitwiseOperators: true,
+      integerDivision: true,
+      relaxedBreak: true
+    },
+    'LuaJIT': {
+      // XXX: LuaJIT language features may depend on compilation options; may need to
+      // rethink how to handle this. Specifically, there is a LUAJIT_ENABLE_LUA52COMPAT
+      // that removes contextual goto. Maybe add 'LuaJIT-5.2compat' as well?
+      labels: true,
+      contextualGoto: true,
+      hexEscapes: true,
+      skipWhitespaceEscape: true,
+      strictEscapes: true,
+      unicodeEscapes: true,
+      imaginaryNumbers: true,
+      integerSuffixes: true
+    }
+  };
+
   function parse(_input, _options) {
     if ('undefined' === typeof _options && 'object' === typeof _input) {
       _options = _input;
@@ -2259,7 +2670,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     if (!_options) _options = {};
 
     input = _input || '';
-    options = extend(defaultOptions, _options);
+    options = assign({}, defaultOptions, _options);
 
     // Rewind the lexer
     index = 0;
@@ -2272,9 +2683,19 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     globals = [];
     locations = [];
 
-    if (!((options.luaVersion === '5.1') || (options.luaVersion === '5.2') || (options.luaVersion === '5.3'))) {
+    if (!Object.prototype.hasOwnProperty.call(versionFeatures, options.luaVersion)) {
       throw new Error(sprintf("Lua version '%1' not supported", options.luaVersion));
     }
+
+    features = assign({}, versionFeatures[options.luaVersion]);
+    if (options.extendedIdentifiers !== void 0)
+      features.extendedIdentifiers = !!options.extendedIdentifiers;
+
+    if (!Object.prototype.hasOwnProperty.call(encodingModes, options.encodingMode)) {
+      throw new Error(sprintf("Encoding mode '%1' not supported", options.encodingMode));
+    }
+
+    encodingMode = encodingModes[options.encodingMode];
 
     if (options.comments) comments = [];
     if (!options.wait) return end();
