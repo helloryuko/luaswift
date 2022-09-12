@@ -1,9 +1,9 @@
-# GameSensical Lua optimizer (updated)
+# Lua optimizer (updated)
 Fixed goto parsing, changed lua version to LuaJIT and updated luaparse.
 
 Simple web tool that replaces calls to global functions with calls to local functions and generates a single line of local variable assignments at the top
 
-![preview](https://i.imgur.com/6IpEVVM.png)
+![preview](https://i.imgur.com/6JcuiRc.png)
 
 ## How it works:
 It properly parses the source code (using luaparse) and traverses the AST, detects calls, checks if they're not already defined in the script somewhere and generates that localization line based on that.
