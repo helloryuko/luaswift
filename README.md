@@ -14,5 +14,5 @@ Then it also replaces the 'dot-syntax' with the 'underscore-syntax'. you can jus
 ## Technologies used:
 - [materialize.css](https://github.com/Dogfalo/materialize)
 - [luaparse](https://github.com/oxyc/luaparse)
-- [ace (editor)](https://github.com/ajaxorg/ace) with the 'Darcula' theme
+- [ace (editor)](https://github.com/ajaxorg/ace)
 - [lua-beautifier](https://github.com/dptole/lua-beautifier)
