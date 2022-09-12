@@ -146,7 +146,7 @@ function optimize(code, localsOnly) {
 	let ast = code
 	if(!ast || ast.type != 'Chunk'){
 		try {
-			ast = luaparse.parse(ast)
+			ast = luaparse.parse(ast, {luaVersion: "LuaJIT"})
 		} catch(e) {
 			console.log(`Failed to parse lua code: ${e.toString()}`)
 			M.toast({html: `<span class="red-text">${e.toString()}</span>`, displayLength: 8000})
