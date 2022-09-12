@@ -4,6 +4,10 @@
 	height: 83vh;
 }
 
+nav .brand-logo {
+        padding-left: 10px;
+}
+
 .card-editor {
 	padding: 5px !important;
 	background-color: #282A36 !important;
