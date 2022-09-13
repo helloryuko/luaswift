@@ -1,7 +1,11 @@
-# Lua optimizer (updated):
-Fixed goto parsing, changed lua version to LuaJIT and updated luaparse.
+# Lua optimizer (updated)
+![chuj | kurwa](https://files.catbox.moe/p48el8.svg) 
 
 Simple web tool that replaces calls to global functions with calls to local functions and generates a single line of local variable assignments at the top
+
+Fixed goto parsing, changed lua version to LuaJIT and updated luaparse.
+
+If you encounter any bugs, please contact me in [Telegram](https://t.me/rin1488).
 
 ![preview](https://i.imgur.com/6JcuiRc.png)
 
