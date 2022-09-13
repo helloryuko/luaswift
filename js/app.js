@@ -104,7 +104,7 @@ function traverseAST(object, callsToNonLocals, assignments, i){
 			callsToNonLocals.push([callExpression.base.base.name, callExpression.base.identifier.name, i])
 		} else if(callExpression.base.type == 'Identifier' && callExpression.base.name.match(/_/g) && (callExpression.base.name.match(/_/g)).length >= 1){
 			// most likely call to a already localized function in a table (client_log)
-			if (callExpression.base.name.startsWith("print_")) { continue; }
+			if (callExpression.base.name.startsWith("print_")) { return; }
 			let parts = callExpression.base.name.split('_')
 			callsToNonLocals.push([parts[0], callExpression.base.name.replace(`${parts[0]}_`, ""), i])
 		} else if(callExpression.base.type == 'Identifier'){
