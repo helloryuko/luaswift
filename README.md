@@ -1,4 +1,4 @@
-# Lua optimizer (updated)
+# Lua optimizer (updated):
 Fixed goto parsing, changed lua version to LuaJIT and updated luaparse.
 
 Simple web tool that replaces calls to global functions with calls to local functions and generates a single line of local variable assignments at the top
