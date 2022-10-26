@@ -5,7 +5,7 @@ Simple web tool that replaces calls to global functions with calls to local func
 
 Fixed goto parsing, changed lua version to LuaJIT and updated luaparse.
 
-If you encounter any bugs, please contact me in [Telegram](https://t.me/rin1488).
+If you encounter any bugs, please contact me in [Telegram](https://t.me/run1t).
 
 ![preview](https://i.imgur.com/6JcuiRc.png)
 
