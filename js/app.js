@@ -124,7 +124,7 @@ function traverseAST(object, callsToNonLocals, assignments, i){
 }
 
 function optimize(code, localsOnly) {
-	let header = "-- local variables for API functions. any changes to the line below will be lost on re-generation"
+	let header = "-- local functions - any changes to line below will be lost on re-generation. https://whyredow.github.io"
 	let codeIndex = null
 
 	// if code contains our header treat the next line after it as previous localization (ignored on generation, replaced with new version)
