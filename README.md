@@ -7,7 +7,7 @@ Fixed goto parsing, changed lua version to LuaJIT, fixed neverlose compatibility
 
 If you encounter any bugs, please contact me in [Telegram](https://t.me/run1t).
 
-![preview](https://i.imgur.com/6JcuiRc.png)
+![preview](https://i.imgur.com/hpFtnDF.png)
 
 ## How it works:
 It properly parses the source code (using luaparse) and traverses the AST, detects calls, checks if they're not already defined in the script somewhere and generates that localization line based on that.
