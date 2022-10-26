@@ -1,9 +1,9 @@
-# Lua optimizer (updated)
+# luaswift (gamesense lua optimizer reworked)
 ![chuj | kurwa](https://files.catbox.moe/p48el8.svg) 
 
 Simple web tool that replaces calls to global functions with calls to local functions and generates a single line of local variable assignments at the top
 
-Fixed goto parsing, changed lua version to LuaJIT and updated luaparse.
+Fixed goto parsing, changed lua version to LuaJIT, fixed neverlose compatibility and updated luaparse.
 
 If you encounter any bugs, please contact me in [Telegram](https://t.me/run1t).
 
