@@ -1,45 +1,23 @@
-<!DOCTYPE html>
-
-<html>
 <head>
-	<link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
-	<link type="text/css" rel="stylesheet" href="/css/materialize.min.css"/>
-	<link type="text/css" rel="stylesheet" href="/css/app.css"/>
-
+	<link type="text/css" rel="stylesheet" href="css/app.css"/>
 	<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-	<title>Lua optimizer</title>
+	<title>luaswift</title>
 </head>
 
-<body class="grey darken-4">
-	<nav class="nav" role="navigation">
-		<div class="nav-wrapper container">
-			<a id="logo-container" href="#" class="brand-logo gamesense-green">Lua optimizer</a>
-		</div>
-	</nav>
-
-	<div class="container" style="margin-top: 10px;">
-		<div>
-			<div class="row">
-				<div class="col s12 m10">
-					<a id="btn-optimize" class="waves-effect waves-light btn white-text gamesense-green-bg">Optimize</a>
-					<a id="btn-beautify" class="waves-effect waves-light btn white-text gamesense-green-bg">Beautify</a>
-					<div class="card blue-grey z-depth-2">
-						<div class="card-content card-editor white-text">
-							<div class="editor" id="editor"></div>
-						</div>
-					</div>
-				</div>
-			</div>
-		</div>
+<body style="background-color: #1d2021;">	
+	<div class="nav">
+		<a class="logo" style="color: #a1a1a1">luaswift</a>
+		<a id="btn-optimize" class="button">Optimize</a>
+		<a id="btn-beautify" class="button">Beautify</a>
+		<a class="logo" style="color:#666; font-size: smaller">press ctrl+s to download</a>
 	</div>
+	<div class="editor" id="editor"></div>
 
-	<script type="text/javascript" src="/js/materialize.min.js"></script>
-	<script type="text/javascript" src="/js/ace/ace.js"></script>
-	<script type="text/javascript" src="/js/ace/lua.js"></script>
-	<script type="text/javascript" src="/js/ace/language_tools.js"></script>
-	<script type="text/javascript" src="/js/ace/dracula.js"></script>
-	<script type="text/javascript" src="/js/luaparse.js" async></script>
-	<script type="text/javascript" src="/js/download.js" async></script>
-	<script type="text/javascript" src="/js/app.js?v=2"></script>
+	<script type="text/javascript" src="js/ace/ace.js"></script>
+	<script type="text/javascript" src="js/ace/lua.js"></script>
+	<script type="text/javascript" src="js/ace/language_tools.js"></script>
+	<script type="text/javascript" src="js/ace/dracula.js"></script>
+	<script type="text/javascript" src="js/luaparse.js" async></script>
+	<script type="text/javascript" src="js/download.js" async></script>
+	<script type="text/javascript" src="js/app.js"></script>
 </body>
-</html>
