@@ -109,6 +109,7 @@ function traverseAST(object, callsToNonLocals, assignments, i){
 			callsToNonLocals.push([parts[0], callExpression.base.name.replace(`${parts[0]}_`, ""), i])
 		} else if(callExpression.base.type == 'Identifier'){
 			// call to a local / global without _ in the name (pcall)
+			if (callExpression.base.name == "error") { return; }
 			callsToNonLocals.push([callExpression.base.name ,'', i])
 		}
 	}
