@@ -125,7 +125,7 @@ function traverseAST(object, callsToNonLocals, assignments, i){
 }
 
 function optimize(code, localsOnly) {
-	let header = "-- local functions - any changes to line below will be lost on re-generation. https://rjukankukan.github.io/luaswift"
+	let header = "-- local functions - any changes to line below will be lost on re-generation. https://helloryuko.github.io/luaswift"
 	let codeIndex = null
 
 	// if code contains our header treat the next line after it as previous localization (ignored on generation, replaced with new version)
