@@ -1,24 +1,44 @@
-# luaswift (gamesense lua optimizer reworked)
-![chuj | kurwa](https://files.catbox.moe/p48el8.svg) 
+<div align='center'>
+  luaswift
+</div>
 
-Simple web tool that replaces calls to global functions with calls to local functions and generates a single line of local variable assignments at the top
+<br/>
 
-Try it out here: https://rjukankukan.github.io/luaswift
+<div align='center'>
+  <a href='https://rjukankukan.github.io/luaswift'>try it out</a>
+  <span>&nbsp;-&nbsp;</span>
+  <a href='https://github.com/gamesensical/gamesensical.github.io'>forked from...</a>
+  <span>&nbsp;-&nbsp;</span>
+  <a href='https://t.me/run1t'>contact me</a>
+</div>
 
-Fixed goto parsing, changed lua version to LuaJIT, fixed Neverlose compatibility and updated luaparse.
+### what is this?
 
-If you encounter any bugs, please contact me in [Telegram](https://t.me/run1t).
+it makes your lua script go vroom
 
-![preview](https://i.imgur.com/hpFtnDF.png)
+### how does it make it vroom?
 
-## How it works:
-It properly parses the source code (using luaparse) and traverses the AST, detects calls, checks if they're not already defined in the script somewhere and generates that localization line based on that.
-It also finds calls to already localized functions that aren't defined in the script.
+local variables are known for being **faster to access** than the global ones.
 
-Then it also replaces the 'dot-syntax' with the 'underscore-syntax'. you can just give it a already optimized script and remove that massive header and make it only generate the localization line
+this simple tool replaces calls to global functions with calls to local functions.
 
-## Technologies used:
-- [materialize.css](https://github.com/Dogfalo/materialize)
+this is achieved by...
+1. parsing the script with `luaparse`
+2. going through every function call
+3. checking if the function is not defined elsewhere
+4. adding the function to the local variables list
+5. replacing the function name with the local one
+
+also, it replaces the "dot syntax" with "underscore syntax". love it or not, accessing tables <sub><sup>(and especially accessing global tables)</sup></sub> is slooow.
+
+### why should i prefer this over gamesensical's lua optimizer?
+
+- cool ui
+- supports [neverlose](neverlose.cc) <sub><sup>(ironical, right?)</sup></sub>
+- doesn't break when using `goto`
+- uses `LuaJIT` as a lua version for luaparse
+
+### technologies used...
 - [luaparse](https://github.com/oxyc/luaparse)
 - [ace (editor)](https://github.com/ajaxorg/ace)
 - [lua-beautifier](https://github.com/dptole/lua-beautifier)
