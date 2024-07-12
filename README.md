@@ -5,7 +5,7 @@
 <br/>
 
 <div align='center'>
-  <a href='https://rjukankukan.github.io/luaswift'>try it out</a>
+  <a href='https://helloryuko.github.io/luaswift'>try it out</a>
   <span>&nbsp;-&nbsp;</span>
   <a href='https://github.com/gamesensical/gamesensical.github.io'>forked from...</a>
   <span>&nbsp;-&nbsp;</span>
