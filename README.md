@@ -34,7 +34,7 @@ also, it replaces the "dot syntax" with "underscore syntax". love it or not, acc
 ### why should i prefer this over gamesensical's lua optimizer?
 
 - cool ui
-- supports [neverlose](neverlose.cc) <sub><sup>(ironical, right?)</sup></sub>
+- supports [neverlose](https://neverlose.cc) <sub><sup>(ironical, right?)</sup></sub>
 - doesn't break when using `goto`
 - uses `LuaJIT` as a lua version for luaparse
 
